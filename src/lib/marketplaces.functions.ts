@@ -2,7 +2,6 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { getRequestHost, getRequestHeader } from "@tanstack/react-start/server";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import {
   buildAuthorizationUrl,
   validateMlConfig,
@@ -14,6 +13,7 @@ import {
   createOAuthState,
   listConnections as repoListConnections,
   disconnect as repoDisconnect,
+  getAccessToken,
 } from "./marketplace.repo.server";
 import { logAudit } from "./audit.server";
 
@@ -69,62 +69,20 @@ export const syncMercadoLivre = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }) => {
     const { userId } = context;
-    const { data: conn } = await supabaseAdmin
-      .from("marketplace_connections")
-      .select("id, account_id")
-      .eq("user_id", userId)
-      .eq("provider", "mercadolivre")
-      .maybeSingle();
+    const info = await getAccessToken(userId);
+    if (!info) throw new Error("Conexão Mercado Livre não encontrada");
 
-    if (!conn?.account_id) throw new Error("Conexão Mercado Livre não encontrada");
-
-    // 1) Buscar IDs dos anúncios do vendedor
+    // Leitura live da ML (sem listings_cache — decisão de "degradar" na migração).
+    // A tela de anúncios já lê ao vivo via /api/listings; aqui só validamos a
+    // conexão e contamos os anúncios do vendedor para dar feedback no botão.
     const search = (await mlFetch(
       userId,
-      `/users/${conn.account_id}/items/search?limit=50`,
+      `/users/${info.externalAccountId}/items/search?limit=50`,
     )) as { results?: string[] };
-    const ids = (search.results ?? []).slice(0, 20);
+    const count = (search.results ?? []).length;
 
-    let count = 0;
-    if (ids.length > 0) {
-      // 2) Buscar detalhes em lote
-      const items = (await mlFetch(
-        userId,
-        `/items?ids=${ids.join(",")}`,
-      )) as Array<{ code: number; body: any }>;
-
-      for (const it of items) {
-        if (it.code !== 200 || !it.body) continue;
-        const b = it.body;
-        await supabaseAdmin.from("listings_cache").upsert(
-          {
-            user_id: userId,
-            connection_id: conn.id,
-            provider: "mercadolivre",
-            external_id: b.id,
-            title: b.title ?? "(sem título)",
-            sku: b.seller_custom_field ?? null,
-            price: b.price ?? null,
-            stock: b.available_quantity ?? null,
-            status: b.status ?? null,
-            permalink: b.permalink ?? null,
-            thumbnail_url: b.thumbnail ?? null,
-            raw: b,
-            synced_at: new Date().toISOString(),
-          },
-          { onConflict: "provider,external_id" },
-        );
-        count++;
-      }
-    }
-
-    await supabaseAdmin
-      .from("marketplace_connections")
-      .update({ last_sync_at: new Date().toISOString() })
-      .eq("id", conn.id);
-
-    await supabaseAdmin.from("audit_logs").insert({
-      user_id: userId,
+    await logAudit({
+      sellerId: userId,
       actor: "user",
       action: "mercadolivre.sync",
       detail: { listings: count },

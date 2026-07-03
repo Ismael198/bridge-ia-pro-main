@@ -1,9 +1,9 @@
 // Server function: GET /api/listings
-// Fetches user's listings from Mercado Livre and caches them locally
+// Fetches user's listings live from Mercado Livre (no local cache — see migration
+// decision to "degrade" listings_cache; data is always read live from the ML API).
 
 import { createServerFn } from "@tanstack/react-start/server";
 import { listUserItems } from "@/lib/mercadolivre.items";
-import { supabaseAdmin } from "@/integrations/supabase/client.server";
 
 // Define return type for client-side
 export interface ListingData {
@@ -44,35 +44,7 @@ export const getListings = createServerFn({ method: "GET" })(async function (opt
 
     console.log(`[Listings] Got ${items.length} items from ML API`);
 
-    // Cache locally in Supabase
-    const listingsToCache = items.map((item: any) => ({
-      user_id: userId,
-      item_id: item.id,
-      title: item.title,
-      price: item.price,
-      status: item.status,
-      sold_quantity: item.sold_quantity || 0,
-      available_quantity: item.available_quantity || 0,
-      category_id: item.category_id,
-      condition: item.condition,
-      currency_id: item.currency_id,
-      permalink: item.permalink,
-      data: item, // Store full data as JSONB
-      synced_at: new Date().toISOString(),
-    }));
-
-    const { error: cacheError } = await supabaseAdmin.from("listings_cache").upsert(listingsToCache, {
-      onConflict: "item_id",
-    });
-
-    if (cacheError) {
-      console.warn(`[Listings] Cache warning: ${cacheError.message}`);
-      // Don't fail if cache fails, just warn
-    } else {
-      console.log(`[Listings] Cached ${listingsToCache.length} items`);
-    }
-
-    // Return formatted data for client
+    // Return formatted data for client (live — no cache write)
     return items.map((item: any): ListingData => ({
       id: item.id,
       title: item.title,

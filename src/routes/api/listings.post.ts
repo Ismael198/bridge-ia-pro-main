@@ -3,7 +3,6 @@
 
 import { createServerFn } from "@tanstack/react-start/server";
 import { createItem, predictCategory } from "@/lib/mercadolivre.items";
-import { supabaseAdmin } from "@/integrations/supabase/client.server";
 
 export interface CreateListingRequest {
   title: string;
@@ -75,23 +74,6 @@ export const createListing = createServerFn({ method: "POST" })(async function (
     const created = await createItem(userId, itemData);
 
     console.log(`[CreateListing] Created item: ${created.id}`);
-
-    // Optionally cache it
-    await supabaseAdmin.from("listings_cache").insert({
-      user_id: userId,
-      item_id: created.id,
-      title: created.title,
-      price: created.price,
-      status: created.status,
-      sold_quantity: created.sold_quantity || 0,
-      available_quantity: created.available_quantity || 0,
-      category_id: created.category_id,
-      condition: created.condition,
-      currency_id: created.currency_id,
-      permalink: created.permalink,
-      data: created,
-      synced_at: new Date().toISOString(),
-    });
 
     return {
       id: created.id,
