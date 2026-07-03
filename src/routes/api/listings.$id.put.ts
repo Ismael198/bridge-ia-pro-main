@@ -3,7 +3,6 @@
 
 import { createServerFn } from "@tanstack/react-start/server";
 import { updateItem, getItem, setItemStatus } from "@/lib/mercadolivre.items";
-import { supabaseAdmin } from "@/integrations/supabase/client.server";
 
 export interface UpdateListingRequest {
   title?: string;
@@ -72,20 +71,6 @@ export const updateListing = createServerFn({ method: "PUT" })(async function (
     const updated = await getItem(userId, itemId);
 
     console.log(`[UpdateListing] Updated ${itemId}`);
-
-    // Update cache
-    await supabaseAdmin
-      .from("listings_cache")
-      .update({
-        title: updated.title,
-        price: updated.price,
-        status: updated.status,
-        available_quantity: updated.available_quantity,
-        sold_quantity: updated.sold_quantity,
-        data: updated,
-        synced_at: new Date().toISOString(),
-      })
-      .eq("item_id", itemId);
 
     return {
       id: updated.id,
