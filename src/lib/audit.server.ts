@@ -1,13 +1,10 @@
 // Auditoria server-side (best-effort) gravando em public.audit_logs (schema remoto).
 // Substitui os inserts diretos em audit_logs espalhados pelo código legado.
 // NUNCA lança: uma falha de auditoria não pode quebrar o fluxo de negócio.
-import type { SupabaseClient } from "@supabase/supabase-js";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
-import type { Database, Json } from "@/integrations/supabase/types.remote";
+import type { Json } from "@/integrations/supabase/types";
 
-// supabaseAdmin é tipado com o schema legado (./types). Aqui re-tipamos para o
-// schema remoto (anti-corruption boundary). `as unknown as` não é `any`.
-const db = supabaseAdmin as unknown as SupabaseClient<Database>;
+const db = supabaseAdmin;
 
 export type AuditActor = "user" | "system";
 
