@@ -8,12 +8,11 @@
 //
 // SERVER-ONLY: usa supabaseAdmin (service_role, bypassa RLS). Nunca importar no client.
 // Ainda NÃO referenciado por nenhuma tela nesta fase (PR-1 = fundação).
-import type { SupabaseClient } from "@supabase/supabase-js";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
-import type { Database, Json } from "@/integrations/supabase/types.remote";
+import type { Database, Json } from "@/integrations/supabase/types";
 
-// Re-tipagem para o schema remoto (o supabaseAdmin default aponta para ./types legado).
-const db = supabaseAdmin as unknown as SupabaseClient<Database>;
+// supabaseAdmin já é tipado com o schema (remoto) canônico via ./types.
+const db = supabaseAdmin;
 
 type MarketplaceAccount = Database["public"]["Tables"]["marketplace_accounts"]["Row"];
 
