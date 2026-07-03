@@ -7,8 +7,10 @@ import {
   buildAuthorizationUrl,
   validateMlConfig,
   getRedirectUri,
+  generatePkce,
   mlFetch,
 } from "./mercadolivre.server";
+import { createOAuthState } from "./marketplace.repo.server";
 
 function getOrigin(): string {
   const proto = getRequestHeader("x-forwarded-proto") ?? "https";
@@ -32,20 +34,16 @@ export const startMercadoLivreOAuth = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }) => {
     const { userId } = context;
-    const { appId } = getMlConfig();
+    const { appId } = validateMlConfig();
     const origin = getOrigin();
     const redirectUri = getRedirectUri(origin);
     const state = crypto.randomUUID();
+    const { codeVerifier, codeChallenge } = await generatePkce();
 
-    const { error } = await supabaseAdmin.from("oauth_states").insert({
-      state,
-      user_id: userId,
-      provider: "mercadolivre",
-      redirect_to: "/marketplaces",
-    });
-    if (error) throw new Error(`oauth_states: ${error.message}`);
+    // Persiste o state + code_verifier (PKCE) no schema remoto via adapter.
+    await createOAuthState({ state, codeVerifier, sellerId: userId });
 
-    const url = buildAuthorizationUrl({ appId, redirectUri, state });
+    const url = buildAuthorizationUrl({ appId, redirectUri, state, codeChallenge });
     console.log("[ML][oauth.start] user", userId, "redirect_uri", redirectUri);
     return { url };
   });
