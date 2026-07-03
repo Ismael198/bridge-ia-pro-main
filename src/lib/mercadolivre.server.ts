@@ -1,6 +1,13 @@
 // Server-only helpers for Mercado Livre OAuth2 + API access.
-// Tokens are read/written via supabaseAdmin (bypasses RLS) and never exposed to client.
-import { supabaseAdmin } from "@/integrations/supabase/client.server";
+// Token storage/decryption lives in the Vault via meli_* RPCs (marketplace.repo.server);
+// plaintext tokens only exist transiently in server memory and are never exposed to client.
+import {
+  getAccessToken,
+  getRefreshToken,
+  applyRefresh,
+  markReauth,
+} from "./marketplace.repo.server";
+import { logAudit } from "./audit.server";
 
 const ML_AUTH_URL = "https://auth.mercadolivre.com.br/authorization";
 const ML_TOKEN_URL = "https://api.mercadolibre.com/oauth/token";
@@ -130,43 +137,48 @@ export async function refreshTokenCall(refreshToken: string): Promise<TokenRespo
 }
 
 // Returns a valid access_token, refreshing if it expires in <120s.
+// Data access goes through the Vault-backed RPCs (marketplace.repo.server); plaintext
+// tokens live only in this function's scope and are never persisted in clear text.
 export async function getValidAccessToken(userId: string): Promise<{ accessToken: string; mlUserId: string }> {
-  const { data: conn, error } = await supabaseAdmin
-    .from("marketplace_connections")
-    .select("*")
-    .eq("user_id", userId)
-    .eq("provider", "mercadolivre")
-    .maybeSingle();
+  const info = await getAccessToken(userId);
+  if (!info) throw new Error("Nenhuma conexão Mercado Livre encontrada");
+  if (info.status === "reauth_required") {
+    throw new Error("Conta Mercado Livre precisa ser reconectada");
+  }
 
-  if (error) throw new Error(error.message);
-  if (!conn) throw new Error("Nenhuma conexão Mercado Livre encontrada");
-  if (!conn.refresh_token) throw new Error("Conexão sem refresh_token");
-
-  const expiresAt = conn.expires_at ? new Date(conn.expires_at).getTime() : 0;
-  const needsRefresh = !conn.access_token || expiresAt - Date.now() < 120_000;
+  const expiresAt = info.tokenExpiresAt ? new Date(info.tokenExpiresAt).getTime() : 0;
+  const needsRefresh = !info.accessToken || expiresAt - Date.now() < 120_000;
 
   if (!needsRefresh) {
-    return { accessToken: conn.access_token!, mlUserId: conn.account_id ?? "" };
+    return { accessToken: info.accessToken, mlUserId: info.externalAccountId };
+  }
+
+  // Precisa renovar: busca o refresh_token (decriptado) só desta conta.
+  const refreshToken = await getRefreshToken(info.accountId);
+  if (!refreshToken) {
+    await markReauth(info.accountId);
+    throw new Error("Conexão Mercado Livre sem refresh_token; reconecte a conta");
   }
 
   console.log("[ML][refresh] renovando token para user", userId);
-  const tok = await refreshTokenCall(conn.refresh_token);
-  const newExpires = new Date(Date.now() + tok.expires_in * 1000).toISOString();
-  await supabaseAdmin
-    .from("marketplace_connections")
-    .update({
-      access_token: tok.access_token,
-      refresh_token: tok.refresh_token,
-      expires_at: newExpires,
-      scope: tok.scope,
-      account_id: String(tok.user_id),
-      status: "connected",
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", conn.id);
+  let tok: TokenResponse;
+  try {
+    tok = await refreshTokenCall(refreshToken);
+  } catch (err) {
+    await markReauth(info.accountId);
+    throw err;
+  }
 
-  await supabaseAdmin.from("audit_logs").insert({
-    user_id: userId,
+  const newExpires = new Date(Date.now() + tok.expires_in * 1000).toISOString();
+  await applyRefresh({
+    accountId: info.accountId,
+    accessToken: tok.access_token,
+    refreshToken: tok.refresh_token,
+    expiresAt: newExpires,
+  });
+
+  await logAudit({
+    sellerId: userId,
     actor: "system",
     action: "ml.token.refresh",
     target: String(tok.user_id),
