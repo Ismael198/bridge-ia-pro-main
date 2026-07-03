@@ -1,6 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { exchangeCodeForToken, getRedirectUri } from "@/lib/mercadolivre.server";
+import {
+  getOAuthState,
+  deleteOAuthState,
+  storeAccount,
+} from "@/lib/marketplace.repo.server";
+import { logAudit } from "@/lib/audit.server";
 
 function html(body: string, status = 200) {
   return new Response(
@@ -28,72 +33,54 @@ export const Route = createFileRoute("/api/public/oauth/mercadolivre/callback")(
         }
         if (!code || !state) return html("<h2>Parâmetros faltando</h2>", 400);
 
-        // Recupera + consome o state
-        const { data: st, error: stErr } = await supabaseAdmin
-          .from("oauth_states")
-          .select("*")
-          .eq("state", state)
-          .eq("provider", "mercadolivre")
-          .maybeSingle();
+        // Recupera o state (+ code_verifier PKCE) do schema remoto via adapter
+        const st = await getOAuthState(state);
 
-        if (stErr || !st) {
-          console.error("[ML][callback] state inválido", stErr);
+        if (!st) {
+          console.error("[ML][callback] state inválido");
           return html("<h2>State inválido ou expirado</h2>", 400);
         }
-        if (new Date(st.expires_at).getTime() < Date.now()) {
-          await supabaseAdmin.from("oauth_states").delete().eq("state", state);
+        if (new Date(st.expiresAt).getTime() < Date.now()) {
+          await deleteOAuthState(state);
           return html("<h2>State expirado</h2>", 400);
         }
 
         const origin = `${url.protocol}//${url.host}`;
         const redirectUri = getRedirectUri(origin);
+        const redirectTo = "/marketplaces";
 
         try {
-          const tok = await exchangeCodeForToken({ code, redirectUri });
+          const tok = await exchangeCodeForToken({
+            code,
+            redirectUri,
+            codeVerifier: st.codeVerifier,
+          });
           const expiresAt = new Date(Date.now() + tok.expires_in * 1000).toISOString();
 
-          // Upsert manual (não temos UNIQUE em user_id+provider)
-          const { data: existing } = await supabaseAdmin
-            .from("marketplace_connections")
-            .select("id")
-            .eq("user_id", st.user_id)
-            .eq("provider", "mercadolivre")
-            .maybeSingle();
+          // Grava/atualiza a conta com tokens criptografados no Vault (upsert via RPC).
+          await storeAccount({
+            sellerId: st.sellerId,
+            externalAccountId: String(tok.user_id),
+            accessToken: tok.access_token,
+            refreshToken: tok.refresh_token,
+            expiresAt,
+          });
 
-          const payload = {
-            user_id: st.user_id,
-            provider: "mercadolivre" as const,
-            account_id: String(tok.user_id),
-            account_label: `ML ${tok.user_id}`,
-            access_token: tok.access_token,
-            refresh_token: tok.refresh_token,
-            expires_at: expiresAt,
-            scope: tok.scope,
-            status: "connected" as const,
-            updated_at: new Date().toISOString(),
-          };
+          await deleteOAuthState(state);
 
-          if (existing) {
-            await supabaseAdmin.from("marketplace_connections").update(payload).eq("id", existing.id);
-          } else {
-            await supabaseAdmin.from("marketplace_connections").insert(payload);
-          }
-
-          await supabaseAdmin.from("oauth_states").delete().eq("state", state);
-
-          await supabaseAdmin.from("audit_logs").insert({
-            user_id: st.user_id,
+          await logAudit({
+            sellerId: st.sellerId,
             actor: "user",
             action: "mercadolivre.connect",
             target: String(tok.user_id),
             detail: { scope: tok.scope },
           });
 
-          console.log("[ML][callback] conectado user", st.user_id, "ml_user", tok.user_id);
+          console.log("[ML][callback] conectado user", st.sellerId, "ml_user", tok.user_id);
           return html(
             `<h2>✓ Conta conectada</h2><p>Mercado Livre vinculado com sucesso.</p>
-            <p><a href="${st.redirect_to ?? "/marketplaces"}">Voltar à aplicação</a></p>
-            <script>setTimeout(function(){location.href=${JSON.stringify(st.redirect_to ?? "/marketplaces")}},1500)</script>`,
+            <p><a href="${redirectTo}">Voltar à aplicação</a></p>
+            <script>setTimeout(function(){location.href=${JSON.stringify(redirectTo)}},1500)</script>`,
           );
         } catch (err) {
           console.error("[ML][callback] falha", err);

@@ -38,12 +38,37 @@ export function getRedirectUri(origin: string) {
   return `${origin}/api/public/oauth/mercadolivre/callback`;
 }
 
-export function buildAuthorizationUrl(opts: { appId: string; redirectUri: string; state: string }) {
+// ── PKCE (S256) ──────────────────────────────────────────────────────────────
+// Edge-compatible: usa apenas Web Crypto (crypto.getRandomValues / subtle.digest)
+// e btoa — sem APIs Node. Exigido pelo oauth_states remoto (code_verifier NOT NULL).
+function base64UrlEncode(bytes: Uint8Array): string {
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+export async function generatePkce(): Promise<{ codeVerifier: string; codeChallenge: string }> {
+  const verifierBytes = new Uint8Array(32);
+  crypto.getRandomValues(verifierBytes);
+  const codeVerifier = base64UrlEncode(verifierBytes); // 43 chars base64url
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(codeVerifier));
+  const codeChallenge = base64UrlEncode(new Uint8Array(digest));
+  return { codeVerifier, codeChallenge };
+}
+
+export function buildAuthorizationUrl(opts: {
+  appId: string;
+  redirectUri: string;
+  state: string;
+  codeChallenge: string;
+}) {
   const u = new URL(ML_AUTH_URL);
   u.searchParams.set("response_type", "code");
   u.searchParams.set("client_id", opts.appId);
   u.searchParams.set("redirect_uri", opts.redirectUri);
   u.searchParams.set("state", opts.state);
+  u.searchParams.set("code_challenge", opts.codeChallenge);
+  u.searchParams.set("code_challenge_method", "S256");
   return u.toString();
 }
 
@@ -56,7 +81,11 @@ type TokenResponse = {
   refresh_token: string;
 };
 
-export async function exchangeCodeForToken(opts: { code: string; redirectUri: string }): Promise<TokenResponse> {
+export async function exchangeCodeForToken(opts: {
+  code: string;
+  redirectUri: string;
+  codeVerifier: string;
+}): Promise<TokenResponse> {
   const { appId, clientSecret } = validateMlConfig();
   const body = new URLSearchParams({
     grant_type: "authorization_code",
@@ -64,6 +93,7 @@ export async function exchangeCodeForToken(opts: { code: string; redirectUri: st
     client_secret: clientSecret,
     code: opts.code,
     redirect_uri: opts.redirectUri,
+    code_verifier: opts.codeVerifier,
   });
   const res = await fetch(ML_TOKEN_URL, {
     method: "POST",
