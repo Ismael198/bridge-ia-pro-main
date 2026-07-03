@@ -328,6 +328,10 @@ export type Database = {
           token_expires_at: string
         }[]
       }
+      meli_get_refresh_token: {
+        Args: { p_account_id: string }
+        Returns: string
+      }
       meli_mark_reauth: { Args: { p_account_id: string }; Returns: undefined }
       meli_store_account: {
         Args: {

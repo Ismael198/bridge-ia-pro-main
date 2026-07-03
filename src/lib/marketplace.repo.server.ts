@@ -132,6 +132,13 @@ export async function getAccessToken(sellerId: string): Promise<AccessTokenInfo 
   };
 }
 
+/** Retorna o refresh_token DECRIPTADO de uma conta específica (ou null). Server-only. */
+export async function getRefreshToken(accountId: string): Promise<string | null> {
+  const { data, error } = await db.rpc("meli_get_refresh_token", { p_account_id: accountId });
+  if (error) throw new Error(error.message);
+  return data ?? null;
+}
+
 export interface ApplyRefreshArgs {
   accountId: string;
   accessToken: string;
