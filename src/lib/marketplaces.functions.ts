@@ -10,7 +10,12 @@ import {
   generatePkce,
   mlFetch,
 } from "./mercadolivre.server";
-import { createOAuthState } from "./marketplace.repo.server";
+import {
+  createOAuthState,
+  listConnections as repoListConnections,
+  disconnect as repoDisconnect,
+} from "./marketplace.repo.server";
+import { logAudit } from "./audit.server";
 
 function getOrigin(): string {
   const proto = getRequestHeader("x-forwarded-proto") ?? "https";
@@ -22,12 +27,8 @@ export const listConnections = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }) => {
     const { userId } = context;
-    const { data, error } = await supabaseAdmin
-      .from("marketplace_connections")
-      .select("id, provider, account_id, account_label, status, scope, expires_at, last_sync_at, metadata, created_at")
-      .eq("user_id", userId);
-    if (error) throw new Error(error.message);
-    return { connections: data ?? [] };
+    const connections = await repoListConnections(userId);
+    return { connections };
   });
 
 export const startMercadoLivreOAuth = createServerFn({ method: "POST" })
@@ -55,18 +56,11 @@ export const disconnectMarketplace = createServerFn({ method: "POST" })
   )
   .handler(async ({ data, context }) => {
     const { userId } = context;
-    const { error } = await supabaseAdmin
-      .from("marketplace_connections")
-      .delete()
-      .eq("user_id", userId)
-      .eq("provider", data.provider);
-    if (error) throw new Error(error.message);
-
-    await supabaseAdmin.from("audit_logs").insert({
-      user_id: userId,
+    await repoDisconnect(userId, data.provider);
+    await logAudit({
+      sellerId: userId,
       actor: "user",
       action: `${data.provider}.disconnect`,
-      detail: {},
     });
     return { ok: true };
   });

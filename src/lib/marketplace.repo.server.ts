@@ -10,7 +10,7 @@
 // Ainda NÃO referenciado por nenhuma tela nesta fase (PR-1 = fundação).
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
-import type { Database } from "@/integrations/supabase/types.remote";
+import type { Database, Json } from "@/integrations/supabase/types.remote";
 
 // Re-tipagem para o schema remoto (o supabaseAdmin default aponta para ./types legado).
 const db = supabaseAdmin as unknown as SupabaseClient<Database>;
@@ -49,7 +49,7 @@ export interface LegacyConnection {
   scope: string | null;
   expires_at: string | null;
   last_sync_at: string | null;
-  metadata: Record<string, unknown> | null;
+  metadata: Json | null;
   created_at: string | null;
 }
 
